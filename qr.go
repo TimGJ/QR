@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"net/url"
+	"strings"
 )
 
 type Coordinate struct {
@@ -21,45 +22,54 @@ type Tile struct {
 	Row      int
 	Column   int
 	Position Coordinate
-	Size     Coordinate
 	Image    []byte
 }
 
 func (t Tile) String() string {
-	return fmt.Sprintf("%s (%d, %d) Position = %s, Size = %s", t.Tag, t.Row, t.Column, t.Position, t.Size)
+	return fmt.Sprintf("%s (%d, %d) Position = %s", t.Tag, t.Row, t.Column, t.Position)
 }
 
 type Page struct {
-	PDF              *gofpdf.Fpdf
-	Margin           float64
-	Prefix           string
-	PageDimensions   Coordinate
-	Origin           Coordinate
-	MaxtrixDiensions Coordinate
-	Title            struct {
-		Position   Coordinate
-		Dimensions Coordinate
-		Text       string
+	PDF               *gofpdf.Fpdf
+	Margin            Coordinate
+	Prefix            string
+	PageDimensions    Coordinate
+	Origin            Coordinate
+	MaxtrixDimensions Coordinate
+	TileDimensions    Coordinate
+	Rows              int
+	Cols              int
+	Tiles             []*Tile
+}
+
+func (p Page) String() string {
+	bob := strings.Builder{}
+	bob.WriteString(fmt.Sprintf("(%d x %d) %s", p.Rows, p.Cols, p.TileDimensions))
+	for _, r := range p.Tiles {
+		bob.WriteString(fmt.Sprintf("\n%s", *r))
 	}
-	Rows  int
-	Cols  int
-	Tiles []*Tile
+	return bob.String()
 }
 
 func (p Page) CreateTile(row int, col int, tag string) *Tile {
 	t := new(Tile)
 	fmt.Printf("Creating tag %s at (%d, %d)\n", tag, row, col)
+	t.Row = row
+	t.Column = col
+	t.Tag = tag
+	t.Position.Height = p.Origin.Height + float64(t.Row)*p.TileDimensions.Height
+	t.Position.Width = p.Origin.Width + float64(t.Column)*p.TileDimensions.Width
 	return t
 }
 
-func CreatePage(rows int, cols int, margin float64, prefix string, title string, filename string) (*Page, error) {
+func CreatePage(rows int, cols int, margin Coordinate, prefix string, filename string) (*Page, error) {
 	const (
 		minrows   = 2
 		maxrows   = 10
 		mincols   = 2
 		maxcols   = 7
 		minmargin = 10.0
-		maxmargin = 25.0
+		maxmargin = 50.0
 	)
 	var m = new(Page)
 	if rows < minrows || rows > maxrows {
@@ -68,8 +78,8 @@ func CreatePage(rows int, cols int, margin float64, prefix string, title string,
 	if cols < mincols || cols > maxcols {
 		return m, fmt.Errorf("Number of columns must be [%d..%d]", mincols, maxcols)
 	}
-	if margin < minmargin || margin > maxmargin {
-		return m, fmt.Errorf("Margin but be [%1.f..%.1f]mm", minmargin, maxmargin)
+	if margin.Width < minmargin || margin.Height < minmargin || margin.Width > maxmargin || margin.Height > maxmargin {
+		return m, fmt.Errorf("Margins must be [%1.f..%.1f]mm", minmargin, maxmargin)
 	}
 
 	if _, err := url.Parse(prefix); err != nil {
@@ -77,30 +87,30 @@ func CreatePage(rows int, cols int, margin float64, prefix string, title string,
 	}
 
 	m.Rows, m.Cols = rows, cols
-	m.Margin = margin
+	m.Margin.Width = margin.Width
+	m.Margin.Height = margin.Height
 	m.Prefix = prefix
-	m.Title.Text = title
-	m.Title.Dimensions.Width = 100.0
-	m.Title.Dimensions.Height = 40.0
-	m.Title.Position.Width = 0.0
-	m.Title.Position.Height = 0.0
 	m.PDF = gofpdf.New("P", "mm", "A4", "")
 	m.PageDimensions.Width, m.PageDimensions.Height = m.PDF.GetPageSize()
+	m.MaxtrixDimensions.Height = m.PageDimensions.Height - 2.0*m.Margin.Height
+	m.MaxtrixDimensions.Width = m.PageDimensions.Width - 2.0*m.Margin.Width
+	m.Origin.Height = m.Margin.Height
+	m.Origin.Width = m.Margin.Width
+	m.TileDimensions.Height = m.MaxtrixDimensions.Height / float64(m.Rows)
+	m.TileDimensions.Width = m.MaxtrixDimensions.Width / float64(m.Cols)
 	m.PDF.AddPage()
-	m.PDF.SetFont("Arial", "B", 16)
-	m.PDF.Cell(40, 10, "Sample QR Codes for Moien")
 	m.PDF.SetFont("Arial", "", 12)
 	for row := 0; row < m.Rows; row++ {
 		for col := 0; col < m.Cols; col++ {
-			m.Tiles = append(m.Tiles, m.CreateTile(row, col, GenerateTag()))
+			tile := m.CreateTile(row, col, GenerateTag())
+			m.Tiles = append(m.Tiles, tile)
+			m.PDF.MoveTo(tile.Position.Width, tile.Position.Height)
+			m.PDF.Cell(m.TileDimensions.Width, m.TileDimensions.Height, tile.Tag)
 		}
 	}
 	if err := m.PDF.OutputFileAndClose(filename); err != nil {
 		return m, err
-	} else {
-
 	}
-
 	return m, nil
 }
 
@@ -144,12 +154,12 @@ func GenerateTag() string {
 }
 
 func main() {
-	const rows = 7 // Number of rows of QR codes to print
-	const cols = 4 // Number of columns of QR codes to print
-	const margin float64 = 10.0
-	const prefix = "https://snapper.devops.ukfast.co.uk/"
+	var rows = 7 // Number of rows of QR codes to print
+	var cols = 4 // Number of columns of QR codes to print
+	var margin = Coordinate{20.0, 20.0}
+	var prefix = "https://snapper.devops.ukfast.co.uk/"
 
-	if p, err := CreatePage(rows, cols, margin, prefix, "Stuff", "foo.pdf"); err != nil {
+	if p, err := CreatePage(rows, cols, margin, prefix, "foo.pdf"); err != nil {
 		log.Fatal(err)
 	} else {
 		fmt.Println(p)
